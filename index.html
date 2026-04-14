@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gauss Curvature &amp; Monge–Ampère — Marginal Problem Visualization</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #ffffff; --bg2: #f7f7f5; --text: #1a1a1a; --text2: #6b6b6b;
+    --border: rgba(0,0,0,0.1); --purple: #534AB7; --teal: #0F6E56;
+    --coral: #D85A30; --blue: #185FA5; --pink: #993556;
+    --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #191919; --bg2: #252525; --text: #e0e0e0; --text2: #999;
+      --border: rgba(255,255,255,0.1); --purple: #AFA9EC; --teal: #5DCAA5;
+      --coral: #F0997B; --blue: #85B7EB; --pink: #ED93B1;
+    }
+  }
+  body { font-family: var(--font); background: var(--bg); color: var(--text); padding: 20px; max-width: 780px; margin: 0 auto; }
+  .eq-bar { font-family: "SF Mono", "Fira Code", monospace; font-size: 13px; padding: 10px 14px; background: var(--bg2); border-radius: 8px; margin: 0 0 16px; line-height: 1.6; border: 0.5px solid var(--border); }
+  .ctrl { display: flex; align-items: center; gap: 10px; margin: 6px 0; font-size: 13px; color: var(--text2); }
+  .ctrl input[type=range] { flex: 1; height: 4px; accent-color: var(--coral); }
+  .ctrl span { min-width: 28px; text-align: right; font-weight: 600; color: var(--text); font-size: 13px; }
+  .ctrl label { min-width: 160px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 16px 0; }
+  @media (max-width: 520px) { .grid { grid-template-columns: 1fr; } }
+  .panel h3 { font-size: 13px; font-weight: 600; margin: 0 0 6px; }
+  canvas { width: 100%; height: 180px; border-radius: 8px; border: 0.5px solid var(--border); background: var(--bg); }
+  .legend { display: flex; gap: 14px; font-size: 11px; color: var(--text2); margin: 5px 0 0; flex-wrap: wrap; }
+  .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 3px; vertical-align: middle; }
+  .note { font-size: 12px; color: var(--text2); margin: 4px 0 0; line-height: 1.5; }
+</style>
+</head>
+<body>
+
+<div class="eq-bar">
+  Monge–Ampère:&nbsp; p(x) = p̃<sub>C</sub>(Du(x)) · det(D²u(x))
+</div>
+
+<div class="ctrl">
+  <label>Target density peaks</label>
+  <input type="range" id="npeaks" min="1" max="3" value="2" step="1" oninput="rebuild()">
+  <span id="npeaks-val">2</span>
+</div>
+<div class="ctrl">
+  <label>Convexity (curvature scale)</label>
+  <input type="range" id="kscale" min="0.3" max="3" value="1" step="0.1" oninput="rebuild()">
+  <span id="kscale-val">1.0</span>
+</div>
+
+<div class="grid">
+  <div class="panel">
+    <h3>Target density p(x) and modified Cauchy p̃<sub>C</sub></h3>
+    <canvas id="c1"></canvas>
+    <div class="legend">
+      <span><span class="dot" style="background:var(--purple)"></span>Target p(x)</span>
+      <span><span class="dot" style="background:var(--teal)"></span>p̃<sub>C</sub>(x)</span>
+    </div>
+  </div>
+  <div class="panel">
+    <h3>Convex potential u(x) and gradient Du(x)</h3>
+    <canvas id="c2"></canvas>
+    <div class="legend">
+      <span><span class="dot" style="background:var(--coral)"></span>u(x)</span>
+      <span><span class="dot" style="background:var(--blue)"></span>Du(x)</span>
+    </div>
+  </div>
+  <div class="panel">
+    <h3>Gauss curvature K(x, u(x))</h3>
+    <canvas id="c3"></canvas>
+    <div class="legend">
+      <span><span class="dot" style="background:var(--pink)"></span>K(x, u(x))</span>
+    </div>
+  </div>
+  <div class="panel">
+    <h3>Transport map: Du pushes p̃<sub>C</sub> → p</h3>
+    <canvas id="c4"></canvas>
+    <div class="note">Arrows show how the gradient map Du redistributes mass from the reference Cauchy to match the target density.</div>
+  </div>
+</div>
+
+<script>
+const N = 200;
+const xmin = -4, xmax = 4;
+const dx = (xmax - xmin) / N;
+
+function xs() { return Array.from({length: N}, (_, i) => xmin + i * dx); }
+
+function cauchyPdf(x) { return 1 / (Math.PI * (1 + x * x)); }
+function modCauchy(x) {
+  const c = cauchyPdf(x);
+  const w = 1 / Math.sqrt(1 + x * x);
+  return c * w / 0.5;
+}
+
+function targetDensity(x, npeaks) {
+  let v = 0;
+  if (npeaks === 1) {
+    v = Math.exp(-x * x / (2 * 0.8 * 0.8));
+  } else if (npeaks === 2) {
+    v = Math.exp(-(x - 1.2) * (x - 1.2) / (2 * 0.5 * 0.5))
+      + 0.7 * Math.exp(-(x + 1.3) * (x + 1.3) / (2 * 0.6 * 0.6));
+  } else {
+    v = Math.exp(-(x - 2) * (x - 2) / (2 * 0.4 * 0.4))
+      + Math.exp(-x * x / (2 * 0.5 * 0.5))
+      + 0.8 * Math.exp(-(x + 2) * (x + 2) / (2 * 0.45 * 0.45));
+  }
+  const X = xs();
+  let sum = 0;
+  for (let i = 0; i < N; i++) {
+    let xi = X[i], vi;
+    if (npeaks === 1) vi = Math.exp(-xi * xi / (2 * 0.8 * 0.8));
+    else if (npeaks === 2) vi = Math.exp(-(xi - 1.2) * (xi - 1.2) / (2 * 0.5 * 0.5)) + 0.7 * Math.exp(-(xi + 1.3) * (xi + 1.3) / (2 * 0.6 * 0.6));
+    else vi = Math.exp(-(xi - 2) * (xi - 2) / (2 * 0.4 * 0.4)) + Math.exp(-xi * xi / (2 * 0.5 * 0.5)) + 0.8 * Math.exp(-(xi + 2) * (xi + 2) / (2 * 0.45 * 0.45));
+    sum += vi * dx;
+  }
+  return v / sum;
+}
+
+function getColors() {
+  const s = getComputedStyle(document.documentElement);
+  return {
+    purple: s.getPropertyValue('--purple').trim(),
+    teal:   s.getPropertyValue('--teal').trim(),
+    coral:  s.getPropertyValue('--coral').trim(),
+    blue:   s.getPropertyValue('--blue').trim(),
+    pink:   s.getPropertyValue('--pink').trim(),
+    text2:  s.getPropertyValue('--text2').trim(),
+    border: s.getPropertyValue('--border').trim(),
+  };
+}
+
+function drawPlot(canvasId, datasets, opts = {}) {
+  const canvas = document.getElementById(canvasId);
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  canvas.width = w * dpr; canvas.height = h * dpr;
+  ctx.scale(dpr, dpr);
+
+  const pad = {l: 36, r: 12, t: 12, b: 24};
+  const pw = w - pad.l - pad.r, ph = h - pad.t - pad.b;
+
+  let ymin = opts.ymin ?? 0, ymax = opts.ymax ?? 0;
+  for (const ds of datasets) {
+    if (ds.type === 'arrows') continue;
+    for (const v of ds.y) {
+      if (v < ymin) ymin = v;
+      if (v > ymax) ymax = v;
+    }
+  }
+  if (ymax === ymin) ymax = ymin + 1;
+  const ypad = (ymax - ymin) * 0.1;
+  ymin -= ypad; ymax += ypad;
+
+  const toX = x => pad.l + (x - xmin) / (xmax - xmin) * pw;
+  const toY = y => pad.t + (1 - (y - ymin) / (ymax - ymin)) * ph;
+
+  const col = getColors();
+
+  ctx.strokeStyle = col.border;
+  ctx.lineWidth = 0.5;
+  if (ymin < 0 && ymax > 0) {
+    ctx.beginPath(); ctx.moveTo(pad.l, toY(0)); ctx.lineTo(w - pad.r, toY(0)); ctx.stroke();
+  }
+  ctx.beginPath(); ctx.moveTo(toX(0), pad.t); ctx.lineTo(toX(0), h - pad.b); ctx.stroke();
+
+  ctx.fillStyle = col.text2;
+  ctx.font = '10px -apple-system, sans-serif';
+  ctx.textAlign = 'center';
+  for (let x = -3; x <= 3; x++) {
+    ctx.fillText(x, toX(x), h - pad.b + 14);
+  }
+
+  for (const ds of datasets) {
+    ctx.strokeStyle = ds.color;
+    ctx.lineWidth = ds.width || 1.5;
+    ctx.globalAlpha = ds.alpha || 1;
+    if (ds.dash) ctx.setLineDash(ds.dash); else ctx.setLineDash([]);
+
+    if (ds.type === 'arrows') {
+      ctx.lineWidth = 1;
+      const step = Math.floor(N / 12);
+      for (let i = step; i < N - step; i += step) {
+        const x0 = ds.x[i];
+        const x1 = ds.x2[i];
+        const sx = toX(x0), sy = toY(0.05);
+        const ex = toX(x1), ey = toY(-0.05);
+        ctx.beginPath();
+        ctx.moveTo(sx, sy - 10);
+        ctx.quadraticCurveTo((sx + ex) / 2, sy - 40 - Math.abs(x1 - x0) * 8, ex, ey + 10);
+        ctx.stroke();
+        const angle = Math.atan2(ey + 10 - (sy - 40), ex - (sx + ex) / 2);
+        ctx.beginPath();
+        ctx.moveTo(ex, ey + 10);
+        ctx.lineTo(ex - 5 * Math.cos(angle - 0.4), ey + 10 - 5 * Math.sin(angle - 0.4));
+        ctx.moveTo(ex, ey + 10);
+        ctx.lineTo(ex - 5 * Math.cos(angle + 0.4), ey + 10 - 5 * Math.sin(angle + 0.4));
+        ctx.stroke();
+      }
+    } else {
+      ctx.beginPath();
+      const X = ds.x || xs();
+      for (let i = 0; i < ds.y.length; i++) {
+        const px = toX(X[i]), py = toY(ds.y[i]);
+        if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+      }
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+    ctx.setLineDash([]);
+  }
+}
+
+function rebuild() {
+  const npeaks = parseInt(document.getElementById('npeaks').value);
+  const k = parseFloat(document.getElementById('kscale').value);
+  document.getElementById('npeaks-val').textContent = npeaks;
+  document.getElementById('kscale-val').textContent = k.toFixed(1);
+
+  const X = xs();
+  const col = getColors();
+
+  const pTarget = X.map(x => targetDensity(x, npeaks));
+  const pCmod = X.map(x => modCauchy(x));
+
+  const u = [], du = [], ddu = [];
+  for (let i = 0; i < N; i++) {
+    const x = X[i];
+    let base = 0.5 * k * x * x;
+    let dbase = k * x;
+    let ddbase = k;
+    if (npeaks >= 2) {
+      base += 0.15 * k * Math.exp(-0.5 * (x - 1) * (x - 1));
+      dbase += 0.15 * k * (-(x - 1)) * Math.exp(-0.5 * (x - 1) * (x - 1));
+      ddbase += 0.15 * k * ((x - 1) * (x - 1) - 1) * Math.exp(-0.5 * (x - 1) * (x - 1));
+    }
+    if (npeaks >= 3) {
+      base += 0.12 * k * Math.exp(-0.5 * (x + 1.5) * (x + 1.5));
+      dbase += 0.12 * k * (-(x + 1.5)) * Math.exp(-0.5 * (x + 1.5) * (x + 1.5));
+      ddbase += 0.12 * k * ((x + 1.5) * (x + 1.5) - 1) * Math.exp(-0.5 * (x + 1.5) * (x + 1.5));
+    }
+    u.push(base);
+    du.push(dbase);
+    ddu.push(Math.max(ddbase, 0.01));
+  }
+
+  const K = [];
+  for (let i = 0; i < N; i++) {
+    K.push(ddu[i] / Math.pow(1 + du[i] * du[i], 1.5));
+  }
+
+  drawPlot('c1', [
+    { y: pTarget, color: col.purple, width: 2 },
+    { y: pCmod, color: col.teal, width: 1.5, dash: [4, 3] }
+  ]);
+
+  drawPlot('c2', [
+    { y: u, color: col.coral, width: 2 },
+    { y: du, color: col.blue, width: 1.5, dash: [4, 3] }
+  ]);
+
+  drawPlot('c3', [
+    { y: K, color: col.pink, width: 2 }
+  ]);
+
+  drawPlot('c4', [
+    { y: pTarget, color: col.purple, width: 1.5, alpha: 0.4 },
+    { y: pCmod, color: col.teal, width: 1.5, alpha: 0.4, dash: [4, 3] },
+    { type: 'arrows', x: X, x2: du, color: col.coral }
+  ]);
+}
+
+rebuild();
+window.addEventListener('resize', rebuild);
+window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => setTimeout(rebuild, 50));
+</script>
+</body>
+</html>
